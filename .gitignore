@@ -1,0 +1,9 @@
+build/
+.vscode/
+.DS_Store
+.idea/*
+venv/
+doc/latex/*
+doc/html/*
+datasets/
+datasets
