@@ -133,6 +133,7 @@ namespace Function{
     template<typename Ty>
     void add_outer_product(Ty* data, const size_t *start_index, const size_t *end_index, const size_t *stride,
                            const std::vector<Tensor<Ty>> &M, Ty val, const shape_t &index, size_t dim, const bool * is_contract) {
+        
         auto size_dim = end_index[dim] - start_index[dim];
         auto I_dim = M[dim].shape()[0];
 

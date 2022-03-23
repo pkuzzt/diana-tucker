@@ -159,10 +159,5 @@ if (USE_BLAS OR USE_LAPACK)
 endif (USE_BLAS OR USE_LAPACK)
 
 if (USE_LAPACK)
-    target_link_libraries(${PROJECT_NAME} PUBLIC "${LAPACK_LIBRARIES}" "/usr/lib/x86_64-linux-gnu/liblapacke.a")
+    target_link_libraries(${PROJECT_NAME} PUBLIC "${LAPACK_LIBRARIES}")
 endif (USE_LAPACK)
-
-
-# subdirectory
-#get_target_property(DIANA_LIBRARIES_LINKED ${PROJECT_NAME} LINK_LIBRARIES)
-#add_subdirectory(tests)
