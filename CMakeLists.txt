@@ -161,3 +161,7 @@ endif (USE_BLAS OR USE_LAPACK)
 if (USE_LAPACK)
     target_link_libraries(${PROJECT_NAME} PUBLIC "${LAPACK_LIBRARIES}")
 endif (USE_LAPACK)
+
+if (USE_LAPACKE)
+    target_link_libraries(${PROJECT_NAME} PUBLIC /usr/lib/x86_64-linux-gnu/liblapacke.a)
+endif(USE_LAPACKE)

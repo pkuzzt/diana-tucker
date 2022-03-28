@@ -12,9 +12,8 @@ namespace Function{
     template<typename Ty>
     Tensor<Ty>
     ttmNTc(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M,
-         const std::vector<size_t> &idx, Distribution* distribution) {
-        // TODO:Permutation
-
+         const std::vector<size_t> &idx, Distribution* distribution, bool to_permu) {
+        Summary::start(METHOD_NAME);
         shape_t local_shape, local_start, local_end;
         shape_t global_shape = A.shape();
         int tag_index = 0, tag_data = 1;
@@ -24,12 +23,22 @@ namespace Function{
         auto recv_data = new MPI_Request;
         auto is_contract = new bool[A.ndim()];
 
-        for (size_t i = 0; i < A.ndim(); i++)
-            is_contract[i] = false;
-
         for (auto i : idx) {
             global_shape[i] = M[i].shape()[1];
-            is_contract[i] = true;
+        }
+
+        for (size_t i = 0; i < A.ndim(); i++)
+            is_contract[i] = false;
+        if (!to_permu) {
+            for (auto i : idx) {
+                global_shape[i] = M[i].shape()[1];
+                is_contract[i] = true;
+            }
+        }
+        else {
+            for (size_t i = 0; i < idx.size(); i++) {
+                is_contract[i] = true;
+            }
         }
         distribution->get_local_data(global_shape, local_shape, local_start, local_end);
         auto *index_buffer_recv = new size_t[3 * A.ndim() + 1];
@@ -40,20 +49,42 @@ namespace Function{
         auto current_stride = index_buffer_recv + 2 * A.ndim();
         auto current_size = index_buffer_recv + 3 * A.ndim();
 
-
+        shape_t permu;
+        if (to_permu) {
+            for (auto i : idx) {
+                permu.push_back(i);
+            }
+            for (size_t i = 0; i < A.ndim(); i++) {
+                bool in_idx = false;
+                for (auto j : idx) {
+                    if (i == j) {
+                        in_idx = true;
+                        break;
+                    }
+                }
+                if (!in_idx) {
+                    permu.push_back(i);
+                }
+            }
+        }
+        else {
+            for (size_t i = 0; i < A.ndim(); i++) {
+                permu.push_back(i);
+            }
+        }
 
         size_t local_size = 1, max_size;
         for (auto mode : local_shape)
             local_size *= mode;
 
         for (size_t i = 0; i < A.ndim(); i++) {
-            index_buffer_send[i] = local_start[i];
-            index_buffer_send[i + A.ndim()] = local_end[i];
+            index_buffer_send[i] = local_start[permu[i]];
+            index_buffer_send[i + A.ndim()] = local_end[permu[i]];
         }
 
         index_buffer_send[2 * A.ndim()] = 1;
         for (size_t i = 1; i < A.ndim(); i++) {
-            index_buffer_send[i + 2 * A.ndim()] = local_shape[i - 1] * index_buffer_send[i - 1 + 2 * A.ndim()];
+            index_buffer_send[i + 2 * A.ndim()] = local_shape[permu[i - 1]] * index_buffer_send[i - 1 + 2 * A.ndim()];
         }
 
         index_buffer_send[3 * A.ndim()] = local_size;
@@ -80,14 +111,27 @@ namespace Function{
             for (size_t i = 0; i < *current_size; i++)
                 data_buffer_tmp[i] = 0;
 
-            for (size_t i = 0; i < A.nnz(); i++) {
-                auto val = A.vals()[i];
-                shape_t index;
-                for (size_t j = 0; j < A.ndim(); j++) {
-                    index.push_back(A.index_lists()[j][i]);
+            if (!to_permu) {
+                for (size_t i = 0; i < A.nnz(); i++) {
+                    auto val = A.vals()[i];
+                    shape_t index;
+                    for (size_t j = 0; j < A.ndim(); j++) {
+                        index.push_back(A.index_lists()[j][i]);
+                    }
+                    Function::add_outer_product<Ty>(data_buffer_tmp, current_start, current_end, current_stride,
+                                                    M, val, index, A.ndim() - 1, is_contract);
                 }
-                Function::add_outer_product<Ty>(data_buffer_tmp, current_start, current_end, current_stride,
-                                                M, val, index, A.ndim() - 1, is_contract);
+            }
+            else {
+                for (size_t i = 0; i < A.nnz(); i++) {
+                    auto val = A.vals()[i];
+                    shape_t index;
+                    for (size_t j = 0; j < A.ndim(); j++) {
+                        index.push_back(A.index_lists()[permu[j]][i]);
+                    }
+                    Function::add_outer_product_permu<Ty>(data_buffer_tmp, current_start, current_end, current_stride,
+                                                    M, val, index, A.ndim() - 1, is_contract, permu);
+                }
             }
 
             if (cycle > 0) {
@@ -115,8 +159,18 @@ namespace Function{
         delete [] data_buffer_recv;
         Tensor<Ty> ret(distribution, global_shape, false);
 
-        for (size_t i = 0; i < *current_size; i++)
-            ret.data()[i] = data_buffer_send[i];
+        if (to_permu) {
+            shape_t ipermu;
+            for (size_t i = 0; i < A.ndim(); i++)
+                ipermu.push_back(0);
+            for (size_t i = 0; i < A.ndim(); i++)
+                ipermu[permu[i]] = i;
+            Function::permutate<Ty>(data_buffer_send, ret.data(), local_shape, ipermu);
+        }
+        else {
+            for (size_t i = 0; i < *current_size; i++)
+                ret.data()[i] = data_buffer_send[i];
+        }
 
         delete [] index_buffer_recv;
         delete [] index_buffer_send;
@@ -126,17 +180,35 @@ namespace Function{
         delete send_data;
         delete recv_index;
         delete recv_data;
-
+        Summary::end(METHOD_NAME);
         return ret;
     }
 
     template<typename Ty>
+    void permutate(Ty* data1, Ty* data2, shape_t & shape, shape_t & permu) {
+        shape_t stride;
+        size_t size;
+        size_t tmp = 1;
+        for (unsigned long i : shape) {
+            stride.push_back(tmp);
+            tmp *= i;
+        }
+        size = tmp;
+        for (size_t i = 0; i < size; i++) {
+            tmp = i;
+            size_t index = 0;
+            for (size_t j = 0; j < shape.size(); j++) {
+                index += stride[permu[j]] * (tmp % shape[permu[j]]);
+                tmp /= shape[permu[j]];
+            }
+            data2[i] = data1[index];
+        }
+    }
+    template<typename Ty>
     void add_outer_product(Ty* data, const size_t *start_index, const size_t *end_index, const size_t *stride,
                            const std::vector<Tensor<Ty>> &M, Ty val, const shape_t &index, size_t dim, const bool * is_contract) {
-        
         auto size_dim = end_index[dim] - start_index[dim];
         auto I_dim = M[dim].shape()[0];
-
 
         if (dim == 0) {
             if (is_contract[dim]) {
@@ -164,6 +236,42 @@ namespace Function{
                 }
                 add_outer_product<Ty>(data + stride[dim] * (index[dim] - start_index[dim]), start_index, end_index, stride, M, val,
                                   index, dim - 1, is_contract);
+            }
+        }
+    }
+
+    template<typename Ty>
+    void add_outer_product_permu(Ty* data, const size_t *start_index, const size_t *end_index, const size_t *stride,
+                                 const std::vector<Tensor<Ty>> &M, Ty val, const shape_t &index, size_t dim, const bool * is_contract, shape_t & permu) {
+        auto size_dim = end_index[dim] - start_index[dim];
+        auto I_dim = M[permu[dim]].shape()[0];
+
+        if (dim == 0) {
+            if (is_contract[dim]) {
+                for (size_t i = 0; i < size_dim; i++) {
+                    data[i] += val * M[permu[dim]].data()[index[dim] + I_dim * (start_index[dim] + i)];
+                }
+            }
+            else {
+                if (index[dim] < start_index[dim] || index[dim] >= end_index[dim])
+                    return;
+                else
+                    data[index[dim] - start_index[dim]] += val;
+            }
+        }
+        else {
+            if (is_contract[dim]) {
+                for (size_t i = 0; i < size_dim; i++) {
+                    add_outer_product_permu<Ty>(data + stride[dim] * i, start_index, end_index, stride, M, val * M[permu[dim]].data()[index[dim] + I_dim * (start_index[dim] + i)],
+                                          index, dim - 1, is_contract, permu);
+                }
+            }
+            else {
+                if (index[dim] < start_index[dim] || index[dim] >= end_index[dim]) {
+                    return;
+                }
+                add_outer_product_permu<Ty>(data + stride[dim] * (index[dim] - start_index[dim]), start_index, end_index, stride, M, val,
+                                      index, dim - 1, is_contract, permu);
             }
         }
     }

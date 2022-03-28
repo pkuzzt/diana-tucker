@@ -42,7 +42,7 @@ namespace Algorithm::SpTucker {
                 MPI_Barrier(MPI_COMM_WORLD);
                 U[n] = Algorithm::Tucker::ALS_(Y, n, U[n]);
             }
-            auto G = Function::ttmNTc(A, U, {0,1,2}, distribution);
+            auto G = Function::ttmNTc(A, U, {0,1,2}, distribution, true);
             auto G_norm = Function::fnorm<Ty>(G);
             output("||G||_F = " + std::to_string(G_norm));
             output("Residual: sqrt(1 - ||G||_F^2 / ||A||_F^2) = " +
@@ -52,7 +52,7 @@ namespace Algorithm::SpTucker {
         shape_t idx;
         for (size_t i = 0; i < A.ndim(); i++)
             idx.push_back(i);
-        auto G = Function::ttmNTc(A, U, idx, distribution);
+        auto G = Function::ttmNTc(A, U, idx, distribution, true);
         auto G_norm = Function::fnorm<Ty>(G);
         output("||G||_F = " + std::to_string(G_norm));
         return std::make_tuple(G, U);
