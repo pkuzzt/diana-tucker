@@ -161,11 +161,15 @@ namespace Function{
 
         if (to_permu) {
             shape_t ipermu;
-            for (size_t i = 0; i < A.ndim(); i++)
+            shape_t permu_shape;
+            for (size_t i = 0; i < A.ndim(); i++) {
                 ipermu.push_back(0);
+                permu_shape.push_back(local_shape[permu[i]]);
+            }
             for (size_t i = 0; i < A.ndim(); i++)
                 ipermu[permu[i]] = i;
-            Function::permutate<Ty>(data_buffer_send, ret.data(), local_shape, ipermu);
+
+            Function::permutate<Ty>(data_buffer_send, ret.data(), permu_shape, ipermu);
         }
         else {
             for (size_t i = 0; i < *current_size; i++)
@@ -204,6 +208,7 @@ namespace Function{
             data2[i] = data1[index];
         }
     }
+
     template<typename Ty>
     void add_outer_product(Ty* data, const size_t *start_index, const size_t *end_index, const size_t *stride,
                            const std::vector<Tensor<Ty>> &M, Ty val, const shape_t &index, size_t dim, const bool * is_contract) {
