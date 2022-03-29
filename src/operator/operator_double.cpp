@@ -209,4 +209,10 @@ void Operator<double>::matmulTN(double *C, double *A, double *B, size_t m,
 #else
     fatal("Cannot calculate matmulNT without BLAS!");
 #endif
+
+}
+
+template<>
+void Operator<double>::AXPY(size_t N, double *x, double *y, double alpha){
+    cblas_daxpy((int) N, alpha, x, 1, y, 1);
 }

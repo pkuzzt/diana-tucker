@@ -61,6 +61,8 @@ public:
     static void reorder_for_scatter_cartesian_block(Ty *A, const shape_t &shape,
                                                     const shape_t &partition,
                                                     int *displs);
+
+    static void AXPY(size_t N, Ty *x, Ty *y, Ty a);
 };
 
 template

@@ -34,7 +34,7 @@ int main(int argc, char * argv[]) {
 
     auto *distribution =
             new DistributionCartesianBlock(par, mpi_rank());
-    shape_t R{100, 100, 100};
+    shape_t R{10, 10, 10};
     auto[G, U] = Algorithm::SpTucker::Sp_HOOI_ALS(A, R, 5 ,distribution);
     Summary::finalize();
     Summary::print_summary();

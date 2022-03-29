@@ -11,7 +11,7 @@ namespace Function{
 
     template<typename Ty>
     Tensor<Ty>
-    ttmNTc(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M,
+    ttmc(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M,
          const std::vector<size_t> &idx, Distribution* distribution, bool to_permu) {
         Summary::start(METHOD_NAME);
         shape_t local_shape, local_start, local_end;
@@ -24,14 +24,13 @@ namespace Function{
         auto is_contract = new bool[A.ndim()];
 
         for (auto i : idx) {
-            global_shape[i] = M[i].shape()[1];
+            global_shape[i] = M[i].shape()[0];
         }
 
         for (size_t i = 0; i < A.ndim(); i++)
             is_contract[i] = false;
         if (!to_permu) {
             for (auto i : idx) {
-                global_shape[i] = M[i].shape()[1];
                 is_contract[i] = true;
             }
         }
@@ -213,12 +212,12 @@ namespace Function{
     void add_outer_product(Ty* data, const size_t *start_index, const size_t *end_index, const size_t *stride,
                            const std::vector<Tensor<Ty>> &M, Ty val, const shape_t &index, size_t dim, const bool * is_contract) {
         auto size_dim = end_index[dim] - start_index[dim];
-        auto I_dim = M[dim].shape()[0];
+        auto J_dim = M[dim].shape()[0];
 
         if (dim == 0) {
             if (is_contract[dim]) {
                 for (size_t i = 0; i < size_dim; i++) {
-                    data[i] += val * M[dim].data()[index[dim] + I_dim * (start_index[dim] + i)];
+                    data[i] += val * M[dim].data()[index[dim] * J_dim + start_index[dim] + i];
                 }
             }
             else {
@@ -231,7 +230,7 @@ namespace Function{
         else {
             if (is_contract[dim]) {
                 for (size_t i = 0; i < size_dim; i++) {
-                    add_outer_product<Ty>(data + stride[dim] * i, start_index, end_index, stride, M, val * M[dim].data()[index[dim] + I_dim * (start_index[dim] + i)],
+                    add_outer_product<Ty>(data + stride[dim] * i, start_index, end_index, stride, M, val * M[dim].data()[index[dim] * J_dim + start_index[dim] + i],
                                       index, dim - 1, is_contract);
                 }
             }
@@ -249,13 +248,15 @@ namespace Function{
     void add_outer_product_permu(Ty* data, const size_t *start_index, const size_t *end_index, const size_t *stride,
                                  const std::vector<Tensor<Ty>> &M, Ty val, const shape_t &index, size_t dim, const bool * is_contract, shape_t & permu) {
         auto size_dim = end_index[dim] - start_index[dim];
-        auto I_dim = M[permu[dim]].shape()[0];
+        auto J_dim = M[permu[dim]].shape()[0];
 
         if (dim == 0) {
             if (is_contract[dim]) {
+                Ty * tmp_data = M[permu[dim]].data() + index[dim] * J_dim + start_index[dim];
                 for (size_t i = 0; i < size_dim; i++) {
-                    data[i] += val * M[permu[dim]].data()[index[dim] + I_dim * (start_index[dim] + i)];
+                    data[i] += val * tmp_data[i];
                 }
+                // TODO: Add SIMD
             }
             else {
                 if (index[dim] < start_index[dim] || index[dim] >= end_index[dim])
@@ -267,7 +268,7 @@ namespace Function{
         else {
             if (is_contract[dim]) {
                 for (size_t i = 0; i < size_dim; i++) {
-                    add_outer_product_permu<Ty>(data + stride[dim] * i, start_index, end_index, stride, M, val * M[permu[dim]].data()[index[dim] + I_dim * (start_index[dim] + i)],
+                    add_outer_product_permu<Ty>(data + stride[dim] * i, start_index, end_index, stride, M, val * M[permu[dim]].data()[index[dim] * J_dim + start_index[dim] + i],
                                           index, dim - 1, is_contract, permu);
                 }
             }

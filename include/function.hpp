@@ -41,7 +41,7 @@ namespace Function {
 
     template<typename Ty>
     Tensor<Ty>
-    ttmNTc(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M,
+    ttmc(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M,
          const std::vector<size_t> &idx, Distribution* distribution, bool to_permu = false);
 
     template<typename Ty>

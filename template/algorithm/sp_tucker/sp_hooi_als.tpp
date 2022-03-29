@@ -26,7 +26,11 @@ namespace Algorithm::SpTucker {
         for (size_t n = 0; n < kN; n++) {
             U[n].sync(0);
         }
-
+        std::vector<Tensor<Ty>> Ut;
+        for (size_t n = 0; n < kN; n++) {
+            auto Ut_n = Function::transpose<Ty>(U[n]);
+            Ut.push_back(Ut_n);
+        }
         Tensor<Ty> G;
         for (size_t iter = 0; iter < max_iter; iter++) {
             output("Calculating iteration " + std::to_string(iter + 1) +
@@ -39,13 +43,13 @@ namespace Algorithm::SpTucker {
                     }
                 }
                 MPI_Barrier(MPI_COMM_WORLD);
-                auto Y = Function::ttmNTc(A, U, idx, distribution, true); //TODO:METTM
+                auto Y = Function::ttmc(A, Ut, idx, distribution, true); //TODO:METTM
                 MPI_Barrier(MPI_COMM_WORLD);
                 U[n] = Algorithm::Tucker::ALS_(Y, n, U[n]);
+                Ut[n] = Function::transpose<Ty>(U[n]);
                 MPI_Barrier(MPI_COMM_WORLD);
                 if (n == A.ndim() - 1) {
-                    auto Ut = Function::transpose<Ty>(U[n]);
-                    G = Function::ttm<Ty>(Y, Ut, n);
+                    G = Function::ttm<Ty>(Y, Ut[n], n);
                     auto G_norm = Function::fnorm<Ty>(G);
                     output("||G||_F = " + std::to_string(G_norm));
                     output("Residual: sqrt(1 - ||G||_F^2 / ||A||_F^2) = " +
