@@ -24,18 +24,82 @@ int main(int argc, char * argv[]) {
     else {
         read_data(argv[1], dbf);
     }
-    SpTensor<double> A(dbf);
-    free(dbf);
-    shape_t par;
-    if (mpi_size() == 1)
-        par = {1, 1, 1};
-    else
-        par = {2, 2, 2};
 
-    auto *distribution =
-            new DistributionCartesianBlock(par, mpi_rank());
-    shape_t R{10, 10, 10};
-    auto[G, U] = Algorithm::SpTucker::Sp_HOOI_ALS(A, R, 5 ,distribution);
+    SpTensor<double> A(dbf);
+    Communicator<size_t>::barrier();
+    shape_t par;
+    if (A.ndim() == 3) {
+        switch(mpi_size()) {
+            case 1:
+                par = {1, 1, 1};
+                break;
+            case 2:
+                par = {2, 1, 1};
+                break;
+            case 4:
+                par = {2, 2, 1};
+                break;
+            case 8:
+                par = {2, 2, 2};
+                break;
+            case 16:
+                par = {4, 2, 2};
+                break;
+            case 32:
+                par = {4, 4, 2};
+                break;
+            case 64:
+                par = {4, 4, 4};
+                break;
+            case 128:
+                par = {8, 4, 4};
+                break;
+            case 256:
+                par = {8, 8, 4};
+                break;
+            case 512:
+                par = {8, 8, 8};
+        }
+
+        shape_t R{100, 100, 100};
+        auto[G, U] = Algorithm::SpTucker::Sp_HOOI_ALS(A, R, 5);
+    }
+    else {
+        switch(mpi_size()) {
+            case 1:
+                par = {1, 1, 1, 1};
+                break;
+            case 2:
+                par = {2, 1, 1, 1};
+                break;
+            case 4:
+                par = {2, 2, 1, 1};
+                break;
+            case 8:
+                par = {2, 2, 2, 1};
+                break;
+            case 16:
+                par = {2, 2, 2, 2};
+                break;
+            case 32:
+                par = {4, 2, 2, 2};
+                break;
+            case 64:
+                par = {4, 4, 2, 2};
+                break;
+            case 128:
+                par = {4, 4, 4, 2};
+                break;
+            case 256:
+                par = {4, 4, 4, 4};
+                break;
+            case 512:
+                par = {8, 4, 4, 4};
+        }
+
+        shape_t R{16, 16, 16, 16};
+        auto[G, U] = Algorithm::SpTucker::Sp_HOOI_ALS(A, R, 5);
+    }
     Summary::finalize();
     Summary::print_summary();
     MPI_Finalize();

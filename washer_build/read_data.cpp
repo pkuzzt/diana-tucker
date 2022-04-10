@@ -2,8 +2,6 @@
 // Created by 30250 on 2022/3/17.
 //
 #include "read_data.hpp"
-#include "communicator.hpp"
-#include "def.hpp"
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <fcntl.h>
@@ -34,8 +32,8 @@ double read_double(const char *cbf, size_t &i) {
 
 template<>
 void read_data(char* filename, data_buffer<double> *dbf) {
-    auto rank = mpi_rank();
-    auto size = mpi_size();
+    auto rank = 0;
+    auto size = 1;
 
     int infile = open(filename, O_RDONLY);
     auto *statbuf = (struct stat*) malloc(sizeof(struct stat));
@@ -94,7 +92,7 @@ void read_data(char* filename, data_buffer<double> *dbf) {
 
     dbf->ndim = ndim;
     dbf->nnz = nnz;
-//    printf("nnz = %lu, rank = %d\n", nnz, rank);
+
     dbf->index_lists = (size_t**) malloc(sizeof(size_t*) * ndim);
     for (i = 0; i < ndim; i++) {
         dbf->index_lists[i] = (size_t*) malloc(sizeof(size_t) * nnz);
@@ -108,28 +106,17 @@ void read_data(char* filename, data_buffer<double> *dbf) {
         }
         dbf->vals[i] = read_double(cbf, k);
     }
-//
-//    for (i = 0; i < 10; i++) {
-//        printf("%lu %lu %lu: %lf\n", dbf->index_lists[0][i], dbf->index_lists[1][i], dbf->index_lists[2][i], dbf->vals[i]);
-//    }
+
     auto dims = (size_t*) malloc(sizeof(size_t) * ndim);
     dbf->dims = (size_t*) malloc(sizeof(size_t) * ndim);
-
+    size_t local_max;
     for (i = 0; i < ndim; i++) {
-        size_t local_max = 0;
+        local_max = 0;
         for (j = 0; j < nnz; j++) {
-            if (local_max < dbf->index_lists[i][j])
-                local_max = dbf->index_lists[i][j];
+            local_max = std::max(local_max, dbf->index_lists[i][j]);
         }
-//        printf("dim: %lu, local_max: %lu\n", i, local_max);
         dims[i] = local_max + 1;
     }
 
-    MPI_Allreduce(dims, dbf->dims, (int) dbf->ndim, MPI_UNSIGNED_LONG, MPI_MAX, MPI_COMM_WORLD);
-//    printf("local size: %lu * %lu * %lu, rank: %d\n", dims[0], dims[1], dims[2], rank);
-//    MPI_Barrier(MPI_COMM_WORLD);
-//    if (rank == 0) {
-//        printf("global size: %lu * %lu * %lu\n", dbf->dims[0], dbf->dims[1], dbf->dims[2]);
-//    }
 }
 

@@ -135,7 +135,7 @@ namespace Function{
 
             if (cycle > 0) {
                 Communicator<Ty>::wait(recv_data);
-                Communicator<Ty>::barrier(MPI_COMM_WORLD);
+                Communicator<Ty>::wait(send_data);
                 for (size_t i = 0; i < *current_size; i++) {
                     data_buffer_send[i] = data_buffer_recv[i] + data_buffer_tmp[i];
                 }
@@ -188,7 +188,27 @@ namespace Function{
     }
 
     template<typename Ty>
+    Tensor<Ty>
+    mettmc(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M,
+               const std::vector<size_t> &idx, Distribution* distribution, bool to_permu, size_t level) {
+        Summary::start(METHOD_NAME);
+        shape_t tmp = idx;
+        shape_t new_idx;
+        std::sort(tmp.begin(), tmp.end(),  [&A, &M](size_t x, size_t y){return A.shape()[x] / M[x].shape()[0] < A.shape()[y] / M[y].shape()[0];});
+        for (size_t i = level; i < tmp.size(); i++) {
+            new_idx.push_back(tmp[i]);
+        }
+        auto Y = Function::ttmc(A, M, new_idx, distribution, to_permu);
+        for (size_t i = 0; i < level; i++) {
+            Y = Function::ttm<Ty>(Y, M[tmp[i]], tmp[i]);
+        }
+        Summary::end(METHOD_NAME);
+        return Y;
+    }
+
+    template<typename Ty>
     void permutate(Ty* data1, Ty* data2, shape_t & shape, shape_t & permu) {
+        Summary::start(METHOD_NAME);
         shape_t stride;
         size_t size;
         size_t tmp = 1;
@@ -205,6 +225,170 @@ namespace Function{
                 tmp /= shape[permu[j]];
             }
             data2[i] = data1[index];
+        }
+        Summary::end(METHOD_NAME);
+    }
+
+    template<typename Ty>
+    Tensor<Ty>
+    ttmc_mTR(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M, size_t n, Tensor<Ty> R) {
+        Summary::start(METHOD_NAME);
+        assert(A.shape()[n] == R.shape()[1]);
+        size_t len1 = 1, len2 = R.shape()[0];
+        shape_t permu, core_shape, core_stride;
+        for (size_t i = 0; i < A.ndim(); i++) {
+            if (i != n) {
+                core_shape.push_back(M[i].shape()[0]);
+                core_stride.push_back(len1);
+                len1 *= M[i].shape()[0];
+                permu.push_back(i);
+            }
+        }
+        permu.push_back(n);
+
+        auto global_distri = new DistributionGlobal();
+        Tensor<Ty> ret(global_distri, {len1, len2}, true);
+
+        auto tmp = (Ty*) malloc(sizeof(Ty) * len1);
+
+        shape_t index;
+        for (size_t i = 0; i < A.ndim() - 1; i++) {
+            index.push_back(0);
+        }
+        for (size_t i = 0; i < A.shape()[n]; i++) {
+            for (size_t j = 0; j < len1; j++) {
+                tmp[j] = 0;
+            }
+
+            for (size_t j = A.v_index_buffer[n].pos[i]; j < A.v_index_buffer[n].pos[i + 1]; j++){
+                auto k = A.v_index_buffer[n].index[j];
+                for (size_t dim = 0; dim < A.ndim(); dim++) {
+                    index[dim] = A.index_lists()[permu[dim]][k];
+                }
+                auto val = A.vals()[k];
+                Function::add_outer_product_all(tmp, core_shape, core_stride, M, val, index, A.ndim() - 2, permu);
+            }
+
+            for (size_t j = 0; j < len1; j++) {
+                for (size_t k = 0; k < len2; k++) {
+                    ret.data()[k * len1 + j] += tmp[j] * R[i * len2 + k];
+                }
+            }
+        }
+
+        free(tmp);
+        Communicator<Ty>::allreduce_inplace(ret.data(), (int) ret.size(), MPI_SUM, MPI_COMM_WORLD);
+        Summary::end(METHOD_NAME);
+        return ret;
+    }
+
+    template<typename Ty>
+    Tensor<Ty>
+    ttmc_mTL(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M, size_t n, Tensor<Ty> L) {
+        Summary::start(METHOD_NAME);
+        assert(L.shape()[1] == M[n].shape()[0]);
+        auto len1 = L.shape()[1], len2 = A.shape()[n];
+        size_t tmp_len = 1;
+
+        auto global_distri = new DistributionGlobal();
+        Tensor<Ty> ret(global_distri, {len1, len2}, true);
+
+        shape_t permu, core_shape, core_stride;
+        for (size_t i = 0; i < A.ndim(); i++) {
+            if (i != n) {
+                core_shape.push_back(M[i].shape()[0]);
+                core_stride.push_back(len1);
+                tmp_len *= M[i].shape()[0];
+                permu.push_back(i);
+            }
+        }
+        assert(L.shape()[0] == tmp_len);
+
+
+        shape_t index;
+        for (size_t i = 0; i < A.ndim() - 1; i++) {
+            index.push_back(0);
+        }
+
+        auto tmp = (Ty*) malloc(sizeof(Ty) * tmp_len);
+        for (size_t i = 0; i < A.shape()[n]; i++) {
+            for (size_t j = 0; j < tmp_len; j++) {
+                tmp[j] = 0;
+            }
+
+            for (size_t j = A.v_index_buffer[n].pos[i]; j < A.v_index_buffer[n].pos[i + 1]; j++){
+                auto k = A.v_index_buffer[n].index[j];
+                for (size_t dim = 0; dim < A.ndim() - 1; dim++) {
+                    index[dim] = A.index_lists()[permu[dim]][k];
+                }
+                auto val = A.vals()[k];
+                Function::add_outer_product_all(tmp, core_shape, core_stride, M, val, index, A.ndim() - 2, permu);
+            }
+
+            auto data = ret.data() + len1 * i;
+            for (size_t j = 0; j < len1; j++) {
+                auto data1 = L.data() + tmp_len * j;
+                for (size_t k = 0; k < tmp_len; k++) {
+                    data[j] += tmp[k] * data1[k];
+                }
+            }
+        }
+        
+        free(tmp);
+        Communicator<Ty>::allreduce_inplace(ret.data(), (int) ret.size(), MPI_SUM, MPI_COMM_WORLD);
+        Summary::end(METHOD_NAME);
+        return ret;
+    }
+
+    template<typename Ty>
+    void add_outer_product_all(Ty *data, const shape_t &shape, const shape_t &stride, const std::vector<Tensor<Ty>> &M, Ty val,
+                               const shape_t &index, size_t dim, shape_t &permu){
+        if (dim == 0) {
+            auto vec0 = M[permu[0]].data() + index[0] * M[permu[0]].shape()[0];
+            auto size0 = M[permu[dim]].shape()[0];
+            for (size_t i = 0; i < size0; i++) {
+                data[i] += val * vec0[i];
+            }
+        }
+        else if (dim == 1) {
+            auto vec1 = M[permu[1]].data() + index[1] * M[permu[1]].shape()[0];
+            auto vec0 = M[permu[0]].data() + index[0] * M[permu[0]].shape()[0];
+            auto size1 = shape[1];
+            auto size0 = shape[0];
+            for (size_t j = 0; j < size1; j++) {
+                auto val1 = val * vec1[j];
+                auto data1 = data + stride[1] * j;
+                for (size_t i = 0; i < size0; i++) {
+                    data1[i] += val1 * vec0[i];
+                }
+            }
+        }
+        else if (dim == 2) {
+            auto vec2 = M[permu[2]].data() + index[2] * M[permu[2]].shape()[0];
+            auto vec1 = M[permu[1]].data() + index[1] * M[permu[1]].shape()[0];
+            auto vec0 = M[permu[0]].data() + index[0] * M[permu[0]].shape()[0];
+            auto size2 = shape[2];
+            auto size1 = shape[1];
+            auto size0 = shape[0];
+            for (size_t k = 0; k < size2; k++) {
+                auto val2 = val * vec2[k];
+                auto data2 = data + stride[2] * k;
+                for (size_t j = 0; j < size1; j++) {
+                    auto val1 = val2 * vec1[j];
+                    auto data1 = data2 + stride[1] * j;
+                    for (size_t i = 0; i < size0; i++) {
+                        data1[i] += val1 * vec0[i];
+                    }
+                }
+            }
+        }
+        else {
+            auto size_dim = shape[dim];
+            auto J_dim = M[permu[dim]].shape()[0];
+            for (size_t i = 0; i < size_dim; i++) {
+                add_outer_product_all<Ty>(data + stride[dim] * i, shape, stride, M, val * M[permu[dim]].data()[index[dim] * J_dim + i],
+                                            index, dim - 1, permu);
+            }
         }
     }
 

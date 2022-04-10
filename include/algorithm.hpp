@@ -16,7 +16,7 @@ namespace Algorithm {
     namespace SpTucker {
         template<typename Ty>
         std::tuple<Tensor<Ty>, std::vector<Tensor<Ty>>>
-        Sp_HOOI_ALS(const SpTensor<Ty> &A, const shape_t &R, size_t max_iter, Distribution *distribution);
+        Sp_HOOI_ALS(const SpTensor<Ty> &A, const shape_t &R, size_t max_iter);
     }
 }; // namespace Algorithm
 
