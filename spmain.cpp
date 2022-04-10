@@ -1,6 +1,3 @@
-//
-// Created by 30250 on 2022/3/17.
-//
 #include "algorithm.hpp"
 #include "communicator.hpp"
 #include "read_data.hpp"
@@ -8,7 +5,7 @@
 #include "sp_tensor.hpp"
 #include "distribution.hpp"
 #include <cstdio>
-
+#include <omp.h>
 int main(int argc, char * argv[]) {
     MPI_Init(&argc, &argv);
     Summary::init();
@@ -25,81 +22,29 @@ int main(int argc, char * argv[]) {
         read_data(argv[1], dbf);
     }
 
+    size_t truncation = 16;
+    char * pend;
+
+    if (argc >= 3) {
+        omp_set_num_threads((int) strtol(argv[2], &pend, 10));
+    }
+
+    if (argc == 4) {
+        truncation = (size_t) strtol(argv[3], &pend, 10);
+    }
     SpTensor<double> A(dbf);
     Communicator<size_t>::barrier();
     shape_t par;
-    if (A.ndim() == 3) {
-        switch(mpi_size()) {
-            case 1:
-                par = {1, 1, 1};
-                break;
-            case 2:
-                par = {2, 1, 1};
-                break;
-            case 4:
-                par = {2, 2, 1};
-                break;
-            case 8:
-                par = {2, 2, 2};
-                break;
-            case 16:
-                par = {4, 2, 2};
-                break;
-            case 32:
-                par = {4, 4, 2};
-                break;
-            case 64:
-                par = {4, 4, 4};
-                break;
-            case 128:
-                par = {8, 4, 4};
-                break;
-            case 256:
-                par = {8, 8, 4};
-                break;
-            case 512:
-                par = {8, 8, 8};
-        }
-
-        shape_t R{100, 100, 100};
-        auto[G, U] = Algorithm::SpTucker::Sp_HOOI_ALS(A, R, 5);
+    output("MPI Size   : " + std::to_string(mpi_size()));
+    output(std::string("File path  : ") + argv[1]);
+    output("truncation : " + std::to_string(truncation));
+    output("nthread    : " + std::to_string(omp_get_max_threads()));
+    shape_t R;
+    for (size_t i = 0; i < A.ndim(); i++) {
+        R.push_back(truncation);
     }
-    else {
-        switch(mpi_size()) {
-            case 1:
-                par = {1, 1, 1, 1};
-                break;
-            case 2:
-                par = {2, 1, 1, 1};
-                break;
-            case 4:
-                par = {2, 2, 1, 1};
-                break;
-            case 8:
-                par = {2, 2, 2, 1};
-                break;
-            case 16:
-                par = {2, 2, 2, 2};
-                break;
-            case 32:
-                par = {4, 2, 2, 2};
-                break;
-            case 64:
-                par = {4, 4, 2, 2};
-                break;
-            case 128:
-                par = {4, 4, 4, 2};
-                break;
-            case 256:
-                par = {4, 4, 4, 4};
-                break;
-            case 512:
-                par = {8, 4, 4, 4};
-        }
+    auto[G, U] = Algorithm::SpTucker::Sp_HOOI_ALS(A, R, 5);
 
-        shape_t R{16, 16, 16, 16};
-        auto[G, U] = Algorithm::SpTucker::Sp_HOOI_ALS(A, R, 5);
-    }
     Summary::finalize();
     Summary::print_summary();
     MPI_Finalize();
