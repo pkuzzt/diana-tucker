@@ -41,8 +41,14 @@ public:
     static void allreduce_inplace(Ty *A, int size, MPI_Op op,
                                   MPI_Comm comm = MPI_COMM_WORLD);
 
+    static void iallreduce_inplace(Ty *A, int size, MPI_Op op,
+                                  MPI_Comm comm, MPI_Request *request);
+
     static void allreduce(Ty *sendbuf, Ty *recvbuf, int size, MPI_Op op,
                           MPI_Comm comm = MPI_COMM_WORLD);
+
+    static void iallreduce(Ty *sendbuf, Ty *recvbuf, int size, MPI_Op op,
+                          MPI_Comm comm, MPI_Request *request);
 
     static void
     sendrecv(Ty *A, int size, int dest, MPI_Comm comm = MPI_COMM_WORLD);
@@ -72,6 +78,8 @@ public:
     static void barrier(MPI_Comm comm = MPI_COMM_WORLD);
 
     static void wait(MPI_Request *request);
+
+    static void waitall(int count, MPI_Request *request);
 
     static void isend(MPI_Request *request, Ty *buf, int count, int dest,
                       MPI_Comm comm = MPI_COMM_WORLD,

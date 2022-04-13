@@ -87,11 +87,23 @@ void Communicator<Ty>::allreduce_inplace(Ty *A, int size, MPI_Op op,
 }
 
 template<class Ty>
+void Communicator<Ty>::iallreduce_inplace(Ty *A, int size, MPI_Op op,
+                               MPI_Comm comm, MPI_Request *request){
+    MPI_Iallreduce(MPI_IN_PLACE, A, size, mpi_type(), op, comm, request);
+}
+
+template<class Ty>
 void Communicator<Ty>::allreduce(Ty *sendbuf, Ty *recvbuf, int size, MPI_Op op,
                                  MPI_Comm comm) {
     Summary::start(METHOD_NAME);
     MPI_Allreduce(sendbuf, recvbuf, size, mpi_type(), op, comm);
     Summary::end(METHOD_NAME);
+}
+
+template<class Ty>
+void Communicator<Ty>::iallreduce(Ty *sendbuf, Ty *recvbuf, int size, MPI_Op op,
+                                  MPI_Comm comm, MPI_Request *request) {
+    MPI_Iallreduce(sendbuf, recvbuf, size, mpi_type(), op, comm, request);
 }
 
 template<class Ty>
@@ -177,6 +189,15 @@ void Communicator<Ty>::wait(MPI_Request *request) {
     Summary::start(METHOD_NAME);
     MPI_Status status;
     MPI_Wait(request, &status);
+    Summary::end(METHOD_NAME);
+}
+
+template<class Ty>
+void Communicator<Ty>::waitall(int count, MPI_Request *request) {
+    Summary::start(METHOD_NAME);
+    auto status_list = (MPI_Status*) malloc(sizeof(MPI_Status) * (size_t) count);
+    MPI_Waitall(count, request, status_list);
+    free(status_list);
     Summary::end(METHOD_NAME);
 }
 

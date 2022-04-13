@@ -62,6 +62,10 @@ public:
                                                     const shape_t &partition,
                                                     int *displs);
 
+    static void orth1(Ty *A, const size_t len1, const size_t len2);
+
+    static void orth2(Ty *A, const size_t len1, const size_t len2);
+
     static void AXPY(size_t N, Ty *x, Ty *y, Ty a);
 };
 

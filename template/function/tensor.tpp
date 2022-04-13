@@ -472,7 +472,6 @@ namespace Function {
             double ret = A.op()->fnorm(A.data(), A.size());
             ret = ret * ret;
             A.comm()->allreduce_inplace(&ret, 1, MPI_SUM);
-//            A.comm()->allreduce_inplace(&ret, 1, MPI_SUM);
             Summary::end(METHOD_NAME);
             return sqrt(ret);
         } else {

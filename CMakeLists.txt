@@ -58,7 +58,6 @@ set(SOURCES
         src/util.cpp
         src/operator/operator_float.cpp
         src/operator/operator_double.cpp
-        src/operator/operator_complex64.cpp
         src/communicator.cpp
         src/distribution.cpp
         include/summary.hpp

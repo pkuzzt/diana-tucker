@@ -7,7 +7,12 @@
 #include <cstdio>
 #include <omp.h>
 int main(int argc, char * argv[]) {
-    MPI_Init(&argc, &argv);
+    int required = MPI_THREAD_FUNNELED;
+    int provided;
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided);
+    if (required > provided) {
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
     Summary::init();
     srand((unsigned int) 1);
     auto rank = mpi_rank();
@@ -22,7 +27,7 @@ int main(int argc, char * argv[]) {
         read_data(argv[1], dbf);
     }
 
-    size_t truncation = 16;
+    size_t truncation = 10;
     char * pend;
 
     if (argc >= 3) {
@@ -32,18 +37,20 @@ int main(int argc, char * argv[]) {
     if (argc == 4) {
         truncation = (size_t) strtol(argv[3], &pend, 10);
     }
-    SpTensor<double> A(dbf);
-    Communicator<size_t>::barrier();
-    shape_t par;
+
     output("MPI Size   : " + std::to_string(mpi_size()));
     output(std::string("File path  : ") + argv[1]);
     output("truncation : " + std::to_string(truncation));
     output("nthread    : " + std::to_string(omp_get_max_threads()));
+
+    SpTensor<double> A(dbf);
+    Communicator<size_t>::barrier();
+
     shape_t R;
     for (size_t i = 0; i < A.ndim(); i++) {
         R.push_back(truncation);
     }
-    auto[G, U] = Algorithm::SpTucker::Sp_HOOI_ALS(A, R, 5);
+    auto[G, U] = Algorithm::SpTucker::Sp_HOOI_ALS(A, R, 1);
 
     Summary::finalize();
     Summary::print_summary();

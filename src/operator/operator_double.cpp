@@ -57,6 +57,7 @@ void Operator<double>::constant(double *A, double c, size_t n) {
 
 template<>
 void Operator<double>::rand(double *A, size_t n) {
+    #pragma omp parallel for
     for (size_t i = 0; i < n; i++) {
         A[i] = (double) std::rand() / RAND_MAX;
     }
@@ -64,6 +65,7 @@ void Operator<double>::rand(double *A, size_t n) {
 
 template<>
 void Operator<double>::randn(double *A, size_t n) {
+    #pragma omp parallel for
     for (size_t i = 0; i < n; i++) {
         A[i] = Util::randn();
     }
@@ -72,6 +74,7 @@ void Operator<double>::randn(double *A, size_t n) {
 template<>
 double Operator<double>::fnorm(double *A, size_t n) {
     double ret = 0;
+    #pragma omp parallel for reduction(+:ret)
     for (size_t i = 0; i < n; i++) {
         ret += A[i] * A[i];
     }
@@ -210,6 +213,67 @@ void Operator<double>::matmulTN(double *C, double *A, double *B, size_t m,
     fatal("Cannot calculate matmulNT without BLAS!");
 #endif
 
+}
+
+template<>
+void Operator<double>::orth1(double* A, const size_t len1, const size_t len2) {
+    //orthogonal by len1
+    Summary::start(METHOD_NAME);
+    for (size_t i = 0; i < len2; i++) {
+        for (size_t j = 0; j < i; j++) {
+            double dot = 0.0;
+            #pragma omp parallel for reduction(+:dot)
+            for (size_t k = 0; k < len1; k++) {
+                dot += A[i * len1 + k] * A[j * len1 + k];
+            }
+            #pragma omp parallel for
+            for (size_t k = 0; k < len1; k++) {
+                A[i * len1 + k] -= A[j * len1 + k] * dot;
+            }
+        }
+        double norm = 0.0;
+        #pragma omp parallel for reduction(+:norm)
+        for (size_t k = 0; k < len1; k++) {
+            norm += A[i * len1 + k] * A[i * len1 + k];
+        }
+        norm = std::sqrt(norm);
+        #pragma omp parallel for
+        for (size_t k = 0; k < len1; k++) {
+            A[i * len1 + k] /= norm;
+        }
+    }
+    Summary::end(METHOD_NAME);
+}
+
+template<>
+void Operator<double>::orth2(double *A, const size_t len1, const size_t len2) {
+    //orthogonal by len2
+    Summary::start(METHOD_NAME);
+    for (size_t i = 0; i < len1; i++) {
+        for (size_t j = 0; j < i; j++) {
+            double dot = 0.0;
+            #pragma omp parallel for reduction(+:dot)
+            for (size_t k = 0; k < len2; k++) {
+                dot += A[k * len1 + i] * A[k * len1 + j];
+            }
+
+            #pragma omp parallel for
+            for (size_t k = 0; k < len2; k++) {
+                A[k * len1 + i] -= A[k * len1 + j] * dot;
+            }
+        }
+        double norm = 0.0;
+        #pragma omp parallel for reduction(+:norm)
+        for (size_t k = 0; k < len2; k++) {
+            norm += A[k * len1 + i] * A[k * len1 + i];
+        }
+        norm = std::sqrt(norm);
+        #pragma omp parallel for
+        for (size_t k = 0; k < len2; k++) {
+            A[k * len1 + i] /= norm;
+        }
+    }
+    Summary::end(METHOD_NAME);
 }
 
 template<>

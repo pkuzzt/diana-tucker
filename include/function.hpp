@@ -67,11 +67,11 @@ namespace Function {
 
     template<typename Ty>
     Tensor<Ty>
-    ttmc_mTR(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M, size_t n, Tensor<Ty> R);
+    ttmc_mTR(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M, size_t n, const Tensor<Ty> &R);
 
     template<typename Ty>
-    Tensor<Ty>
-    ttmc_mTL(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M, size_t n, Tensor<Ty> L);
+    void
+    ttmc_mTL(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M, size_t n, const Tensor<Ty> &L, Tensor<Ty> &ret);
 
     template<typename Ty>
     Tensor<Ty> gram(const Tensor<Ty> &A, size_t n);

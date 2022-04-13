@@ -233,7 +233,7 @@ namespace Function{
 
     template<typename Ty>
     Tensor<Ty>
-    ttmc_mTR(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M, size_t n, Tensor<Ty> R) {
+    ttmc_mTR(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M, size_t n, const Tensor<Ty> &R) {
         Summary::start(METHOD_NAME);
         assert(A.shape()[n] == R.shape()[1]);
         size_t len1 = 1, len2 = R.shape()[0];
@@ -252,14 +252,13 @@ namespace Function{
         Tensor<Ty> ret(global_distri, {len1, len2}, true);
 
         auto nthreads = omp_get_max_threads();
-        auto global_tmp = (Ty*) malloc(sizeof(Ty) * ret.size() * nthreads);
+        auto global_tmp = (Ty*) malloc(sizeof(Ty) * ret.size() * (size_t) nthreads);
 
         #pragma omp parallel
         {
             auto tmp = (Ty*) malloc(sizeof(Ty) * len1);
             auto ithread = omp_get_thread_num();
-
-            auto local_tmp = global_tmp + ithread * ret.size();
+            auto local_tmp = global_tmp + (size_t) ithread * ret.size();
             for (size_t i = 0; i < ret.size(); i++) {
                 local_tmp[i] = 0;
             }
@@ -271,6 +270,9 @@ namespace Function{
 
             #pragma omp for schedule(dynamic)
             for (size_t i = 0; i < A.shape()[n]; i++) {
+                if (A.v_index_buffer[n].pos[i + 1] == A.v_index_buffer[n].pos[i])
+                    continue;
+
                 for (size_t j = 0; j < len1; j++) {
                     tmp[j] = 0;
                 }
@@ -286,7 +288,7 @@ namespace Function{
 
                 for (size_t j = 0; j < len1; j++) {
                     for (size_t k = 0; k < len2; k++) {
-                        local_tmp[k * len1 + j] += tmp[j] * R[i * len2 + k];
+                        local_tmp[k * len1 + j] += tmp[j] * R.data()[i * len2 + k];
                     }
                 }
             }
@@ -294,7 +296,7 @@ namespace Function{
             #pragma omp for
             for (size_t i = 0; i < ret.size(); i++) {
                 for (int idx = 0; idx < nthreads; idx++) {
-                    ret.data()[i] += global_tmp[i + idx * ret.size()];
+                    ret.data()[i] += global_tmp[i + (size_t) idx * ret.size()];
                 }
             }
 
@@ -307,15 +309,11 @@ namespace Function{
     }
 
     template<typename Ty>
-    Tensor<Ty>
-    ttmc_mTL(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M, size_t n, Tensor<Ty> L) {
+    void ttmc_mTL(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M, size_t n, const Tensor<Ty> &L, Tensor<Ty> &ret) {
         Summary::start(METHOD_NAME);
         assert(L.shape()[1] == M[n].shape()[0]);
-        auto len1 = L.shape()[1], len2 = A.shape()[n];
+        auto len1 = L.shape()[1];
         size_t tmp_len = 1;
-
-        auto global_distri = new DistributionGlobal();
-        Tensor<Ty> ret(global_distri, {len1, len2}, true);
 
         shape_t permu, core_shape, core_stride;
         for (size_t i = 0; i < A.ndim(); i++) {
@@ -328,6 +326,14 @@ namespace Function{
         }
         assert(L.shape()[0] == tmp_len);
 
+        #pragma omp parallel for
+        for (size_t i = 0; i < ret.size(); i++) {
+            ret.data()[i] = 0;
+        }
+
+        size_t nstage = 10;
+        nstage = std::min(nstage, DIANA_CEILDIV(A.shape()[n], 10000));
+        auto request_list = new MPI_Request[nstage];
         #pragma omp parallel
         {
             shape_t index;
@@ -336,35 +342,49 @@ namespace Function{
             }
 
             auto tmp = (Ty*) malloc(sizeof(Ty) * tmp_len);
-            #pragma omp for schedule(dynamic)
-            for (size_t i = 0; i < A.shape()[n]; i++) {
-                for (size_t j = 0; j < tmp_len; j++) {
-                    tmp[j] = 0;
-                }
 
-                for (size_t j = A.v_index_buffer[n].pos[i]; j < A.v_index_buffer[n].pos[i + 1]; j++){
-                    auto k = A.v_index_buffer[n].index[j];
-                    for (size_t dim = 0; dim < A.ndim() - 1; dim++) {
-                        index[dim] = A.index_lists()[permu[dim]][k];
-                    }
-                    auto val = A.vals()[k];
-                    Function::add_outer_product_all(tmp, core_shape, core_stride, M, val, index, A.ndim() - 2, permu);
-                }
+            for (size_t stage = 0; stage < nstage; stage++) {
+                size_t start = stage * A.shape()[n] / nstage;
+                size_t end = (stage + 1) * A.shape()[n] / nstage;
 
-                auto data = ret.data() + len1 * i;
-                for (size_t j = 0; j < len1; j++) {
-                    auto data1 = L.data() + tmp_len * j;
-                    for (size_t k = 0; k < tmp_len; k++) {
-                        data[j] += tmp[k] * data1[k];
+                #pragma omp for schedule(dynamic)
+                for (size_t i = start; i < end; i++) {
+                    if (A.v_index_buffer[n].pos[i + 1] == A.v_index_buffer[n].pos[i])
+                        continue;
+
+                    for (size_t j = 0; j < tmp_len; j++) {
+                        tmp[j] = 0;
                     }
+
+                    for (size_t j = A.v_index_buffer[n].pos[i]; j < A.v_index_buffer[n].pos[i + 1]; j++){
+                        auto k = A.v_index_buffer[n].index[j];
+                        for (size_t dim = 0; dim < A.ndim() - 1; dim++) {
+                            index[dim] = A.index_lists()[permu[dim]][k];
+                        }
+                        auto val = A.vals()[k];
+                        Function::add_outer_product_all(tmp, core_shape, core_stride, M, val, index, A.ndim() - 2, permu);
+                    }
+
+                    auto data = ret.data() + len1 * i;
+                    for (size_t j = 0; j < len1; j++) {
+                        auto data1 = L.data() + tmp_len * j;
+                        for (size_t k = 0; k < tmp_len; k++) {
+                            data[j] += tmp[k] * data1[k];
+                        }
+                    }
+                }
+                #pragma omp master
+                {
+                    Communicator<Ty>::iallreduce_inplace(ret.data() + start * len1, (int) len1 * (int) (end - start), MPI_SUM, MPI_COMM_WORLD, request_list + stage);
                 }
             }
 
             free(tmp);
         }
-        Communicator<Ty>::allreduce_inplace(ret.data(), (int) ret.size(), MPI_SUM, MPI_COMM_WORLD);
+        //Communicator<Ty>::allreduce_inplace(ret.data(), (int) ret.size(), MPI_SUM, MPI_COMM_WORLD);
+        Communicator<Ty>::waitall((int) nstage, request_list);
+        delete [] request_list;
         Summary::end(METHOD_NAME);
-        return ret;
     }
 
     template<typename Ty>
