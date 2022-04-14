@@ -9,6 +9,11 @@
 
 namespace Algorithm::SpTucker {
     template<typename Ty>
+    void distri_orth2(const SpTensor<Ty> &A, Tensor<Ty> &U) {
+        
+    }
+
+    template<typename Ty>
     void Sp_TTMC_ALS_(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M, size_t n, Tensor<Ty> &R_initial) {
         Summary::start(METHOD_NAME);
         auto L = Function::ttmc_mTR<Ty>(A, M, n, R_initial); // L = not_R_n * R_n
@@ -35,10 +40,17 @@ namespace Algorithm::SpTucker {
         output("||A||_F = " + std::to_string(A_norm));
         std::vector<Tensor<Ty>> Ut;
         for (size_t n = 0; n < kN; n++) {
-            Tensor<double> U_rand(distribution1, {R[n], I[n]}, false);
-            U_rand.randn();
-            Operator<Ty>::orth2(U_rand.data(), U_rand.shape()[0], U_rand.shape()[1]);
-            Ut.push_back(U_rand);
+            if (n != A.slice_mode) {
+                Tensor<double> U_rand(distribution1, {R[n], I[n]}, false);
+                U_rand.randn();
+                Operator<Ty>::orth2(U_rand.data(), U_rand.shape()[0], U_rand.shape()[1]);
+                Ut.push_back(U_rand);
+            }
+            else {
+                Tensor<double> U_rand(distribution1, {R[n], A.slice_end - A.slice_satrt + 1}, false);
+                U_rand.randn();
+                Algorithm::SpTucker::distri_orth2(A, U_rand);
+            }
         }
         for (size_t n = 0; n < kN; n++) {
             Ut[n].sync(0);

@@ -78,9 +78,9 @@ include_directories(
 
 # Set CXX_FLAGS
 if (DEBUG_MODE)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -g3 -W -Wall -Wextra -Wconversion")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -g3 --Wall")
 else(DEBUG_MODE)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -g -W -Wall -Wextra -Wconversion")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -Wall")
 endif(DEBUG_MODE)
 
 

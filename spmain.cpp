@@ -24,7 +24,7 @@ int main(int argc, char * argv[]) {
         exit(1);
     }
     else {
-        read_data(argv[1], dbf);
+        read_data<double>(argv[1], dbf);
     }
 
     size_t truncation = 10;
@@ -43,8 +43,10 @@ int main(int argc, char * argv[]) {
     output("truncation : " + std::to_string(truncation));
     output("nthread    : " + std::to_string(omp_get_max_threads()));
 
+
     SpTensor<double> A(dbf);
     Communicator<size_t>::barrier();
+    free(dbf);
 
     shape_t R;
     for (size_t i = 0; i < A.ndim(); i++) {
