@@ -1,3 +1,5 @@
+#pragma clang diagnostic push
+#pragma ide diagnostic ignored "openmp-use-default-none"
 #include <omp.h>
 
 namespace Function{
@@ -251,58 +253,33 @@ namespace Function{
         auto global_distri = new DistributionGlobal();
         Tensor<Ty> ret(global_distri, {len1, len2}, true);
 
-        auto nthreads = omp_get_max_threads();
-        auto global_tmp = (Ty*) malloc(sizeof(Ty) * ret.size() * (size_t) nthreads);
+        auto tmp = (Ty*) malloc(sizeof(Ty) * len1);
 
-        #pragma omp parallel
-        {
-            auto tmp = (Ty*) malloc(sizeof(Ty) * len1);
-            auto ithread = omp_get_thread_num();
-            auto local_tmp = global_tmp + (size_t) ithread * ret.size();
-            for (size_t i = 0; i < ret.size(); i++) {
-                local_tmp[i] = 0;
+        shape_t index;
+        for (size_t i = 0; i < A.ndim() - 1; i++) {
+            index.push_back(0);
+        }
+
+        for (size_t i = 0; i < len1; i++) {
+            tmp[i] = 0;
+        }
+
+        for (size_t i = 0; i < A.nnz(); i++) {
+            for (size_t dim = 0; dim < A.ndim(); dim++) {
+                index[dim] = A.index_lists()[permu[dim]][i];
             }
-
-            shape_t index;
-            for (size_t i = 0; i < A.ndim() - 1; i++) {
-                index.push_back(0);
-            }
-
-            #pragma omp for schedule(dynamic)
-            for (size_t i = 0; i < A.shape()[n]; i++) {
-                if (A.v_index_buffer[n].pos[i + 1] == A.v_index_buffer[n].pos[i])
-                    continue;
-
-                for (size_t j = 0; j < len1; j++) {
-                    tmp[j] = 0;
-                }
-
-                for (size_t j = A.v_index_buffer[n].pos[i]; j < A.v_index_buffer[n].pos[i + 1]; j++){
-                    auto k = A.v_index_buffer[n].index[j];
-                    for (size_t dim = 0; dim < A.ndim(); dim++) {
-                        index[dim] = A.index_lists()[permu[dim]][k];
-                    }
-                    auto val = A.vals()[k];
-                    Function::add_outer_product_all(tmp, core_shape, core_stride, M, val, index, A.ndim() - 2, permu);
-                }
-
+            auto val = A.vals()[i];
+            Function::add_outer_product_all(tmp ,core_shape, core_stride, M, val, index, A.ndim() - 2, permu);
+            if (i < A.nnz() - 1 && A.index_lists()[n][i + 1] != A.index_lists()[n][i]) {
                 for (size_t j = 0; j < len1; j++) {
                     for (size_t k = 0; k < len2; k++) {
-                        local_tmp[k * len1 + j] += tmp[j] * R.data()[i * len2 + k];
+                        ret.data()[k * len1 + j] += tmp[j] * R.data()[i * len2 + k];
                     }
                 }
             }
-
-            #pragma omp for
-            for (size_t i = 0; i < ret.size(); i++) {
-                for (int idx = 0; idx < nthreads; idx++) {
-                    ret.data()[i] += global_tmp[i + (size_t) idx * ret.size()];
-                }
-            }
-
-            free(tmp);
         }
-        free(global_tmp);
+
+        free(tmp);
         Communicator<Ty>::allreduce_inplace(ret.data(), (int) ret.size(), MPI_SUM, MPI_COMM_WORLD);
         Summary::end(METHOD_NAME);
         return ret;
@@ -513,3 +490,5 @@ namespace Function{
         }
     }
 }
+
+#pragma clang diagnostic pop
