@@ -20,22 +20,27 @@ namespace Algorithm::SpTucker {
 
         for (size_t i = 0; i < len1; i++) {
             for (size_t j = 0; j < i; j++) {
-                dot_list[j] = 0.0;
+                Ty dot = 0.0;
+                #pragma omp parallel for reduction(+:dot)
                 for (size_t k = start; k < end; k++) {
-                    dot_list[j] += U.data()[k * len1 + i] * U.data()[k * len1 + j];
+                    dot += U.data()[k * len1 + i] * U.data()[k * len1 + j];
                 }
+                dot_list[j] = dot;
             }
             Communicator<Ty>::allreduce_inplace(dot_list.data(), i, MPI_SUM, MPI_COMM_WORLD);
+            #pragma omp parallel for
             for (size_t k = 0; k < len2; k++) {
                 for (size_t j = 0; j < i; j++) {
                     U.data()[k * len1 + i] -= U.data()[k * len1 + j] * dot_list[j];
                 }
             }
             Ty norm = 0.0;
+            #pragma omp parallel for reduction(+:norm)
             for (size_t k = 0; k < len2; k++) {
                 norm += U.data()[k * len1 + i] * U.data()[k * len1 + i];
             }
             norm = std::sqrt(norm);
+            #pragma omp parallel for
             for (size_t k = 0; k < len2; k++) {
                 U.data()[k * len1 + i] /= norm;
             }
@@ -56,20 +61,24 @@ namespace Algorithm::SpTucker {
         for (size_t i = 0; i < len1; i++) {
             for (size_t j = 0; j < i; j++) {
                 Ty dot = 0.0;
+                #pragma omp parallel for reduction(+:dot)
                 for (size_t k = start_len2; k < len2; k++) {
                     dot += U.data()[k * len1 + i] * U.data()[k * len1 + j];
                 }
                 Communicator<Ty>::allreduce_inplace(&dot, 1, MPI_SUM, MPI_COMM_WORLD);
+                #pragma omp parallel for
                 for (size_t k = 0; k < len2; k++) {
                     U.data()[k * len1 + i] -= U.data()[k * len1 + j] * dot;
                 }
             }
             Ty norm = 0.0;
+            #pragma omp parallel for reduction(+:norm)
             for (size_t k = start_len2; k < len2; k++) {
                 norm += U.data()[k * len1 + i] * U.data()[k * len1 + i];
             }
             Communicator<Ty>::allreduce_inplace(&norm, 1, MPI_SUM, MPI_COMM_WORLD);
             norm = std::sqrt(norm);
+            #pragma omp parallel for
             for (size_t k = 0; k < len2; k++) {
                 U.data()[k * len1 + i] /= norm;
             }
