@@ -43,6 +43,7 @@ namespace Algorithm::SpTucker {
 
         Summary::end(METHOD_NAME);
     }
+
     template<typename Ty>
     void distri_orth2(const SpTensor<Ty> &A, Tensor<Ty> &U) {
         Summary::start(METHOD_NAME);
@@ -111,7 +112,7 @@ namespace Algorithm::SpTucker {
                 Tensor<double> U_rand(distribution1, {R[n], I[n]}, false);
                 U_rand.randn();
                 U_rand.sync(0);
-                Operator<Ty>::global_orth2(U_rand);
+                Algorithm::SpTucker::global_orth2(U_rand);
                 Ut.push_back(U_rand);
             }
             else {

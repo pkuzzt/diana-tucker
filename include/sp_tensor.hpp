@@ -39,6 +39,7 @@ public:
     shape_t send_to_list;
     shape_t recv_from_list;
     std::vector<size_t*> v_index_list;
+    std::vector<size_t*> v_pos_list;
     SpTensor();
     SpTensor(data_buffer<Ty> *);
     ~SpTensor();
@@ -59,6 +60,7 @@ SpTensor<Ty>::~SpTensor() {
     free(this->index_lists_);
     for (size_t i = 0; i < this->v_index_list.size(); i++) {
         free(this->v_index_list[i]);
+        free(this->v_pos_list[i]);
     }
 }
 
@@ -246,21 +248,26 @@ SpTensor<Ty>::SpTensor(data_buffer<Ty> *dbf) {
 
     for (size_t i = 0; i < this->ndim(); i++) {
         auto index_ptr = (size_t*) malloc(sizeof(size_t) * this->nnz());
+        auto pos_ptr = (size_t*) malloc(sizeof(size_t) * (this->shape()[i] + 1));
         for (size_t j = 0; j <= this->shape()[i]; j++) {
-            start_index_list[j] = 0;
+            pos_ptr[j] = 0;
         }
         for (size_t j = 0; j < this->nnz(); j++) {
             auto idx_i = this->index_lists()[i][j];
-            start_index_list[idx_i + 1]++;
+            pos_ptr[idx_i + 1]++;
         }
         for (size_t j = 1; j <= this->shape()[i]; j++) {
-            start_index_list[j] += start_index_list[j - 1];
+            pos_ptr[j] += pos_ptr[j - 1];
+        }
+        for (size_t j = 0; j <= this->shape()[i]; j++) {
+            start_index_list[j] = pos_ptr[j];
         }
         for (size_t j = 0; j < this->nnz(); j++) {
             auto idx_i = this->index_lists()[i][j];
             index_ptr[start_index_list[idx_i]++] = j;
         }
         this->v_index_list.push_back(index_ptr);
+        this->v_pos_list.push_back(pos_ptr);
     }
 
     delete [] start_index_list;

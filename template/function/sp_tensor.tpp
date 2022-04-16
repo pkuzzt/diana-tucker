@@ -373,54 +373,95 @@ namespace Function{
             index.push_back(0);
         }
 
-        for (size_t i = 0; i < tmp_len; i++) {
-            tmp[i] = 0;
-        }
-        for (size_t i = 0; i < A.nnz() - 1; i++) {
-            auto k = A.v_index_list[n][i];
-            auto next_k = A.v_index_list[n][i + 1];
+        if (n == A.slice_mode) {
+            memset(tmp, 0, sizeof(Ty) * tmp_len);
+
+            for (size_t i = 0; i < A.nnz() - 1; i++) {
+                auto k = A.v_index_list[n][i];
+                auto next_k = A.v_index_list[n][i + 1];
+                for (size_t dim = 0; dim < A.ndim() - 1; dim++) {
+                    index[dim] = A.index_lists()[permu[dim]][k];
+                }
+                auto val = A.vals()[k];
+
+                Function::add_outer_product_all(tmp, core_shape, core_stride, M, val, index, A.ndim() - 2, permu, start_index);
+
+                if (A.index_lists()[n][k] != A.index_lists()[n][next_k]) {
+                    auto data = ret.data() + len1 * (A.index_lists()[n][k] - start_index[n]);
+                    for (size_t j = 0; j < len1; j++) {
+                        auto data1 = L.data() + tmp_len * j;
+                        for (size_t l = 0; l < tmp_len; l++) {
+                            data[j] += tmp[l] * data1[l];
+                        }
+                    }
+                    memset(tmp, 0, sizeof(Ty) * tmp_len);
+                }
+            }
+
+            auto k = A.v_index_list[n][A.nnz() - 1];
             for (size_t dim = 0; dim < A.ndim() - 1; dim++) {
                 index[dim] = A.index_lists()[permu[dim]][k];
             }
+
             auto val = A.vals()[k];
-
             Function::add_outer_product_all(tmp, core_shape, core_stride, M, val, index, A.ndim() - 2, permu, start_index);
-
-            if (A.index_lists()[n][k] != A.index_lists()[n][next_k]) {
-                auto data = ret.data() + len1 * (A.index_lists()[n][k] - start_index[n]);
-                for (size_t j = 0; j < len1; j++) {
-                    auto data1 = L.data() + tmp_len * j;
-                    for (size_t l = 0; l < tmp_len; l++) {
-                        data[j] += tmp[l] * data1[l];
-                    }
+            auto data = ret.data() + len1 * (A.index_lists()[n][k] - start_index[n]);
+            for (size_t j = 0; j < len1; j++) {
+                auto data1 = L.data() + tmp_len * j;
+                for (size_t l = 0; l < tmp_len; l++) {
+                    data[j] += tmp[l] * data1[l];
                 }
-                memset(tmp, 0, sizeof(Ty) * tmp_len);
             }
-        }
 
-        auto k = A.v_index_list[n][A.nnz() - 1];
-        for (size_t dim = 0; dim < A.ndim() - 1; dim++) {
-            index[dim] = A.index_lists()[permu[dim]][k];
-        }
-        auto val = A.vals()[k];
-        Function::add_outer_product_all(tmp, core_shape, core_stride, M, val, index, A.ndim() - 2, permu, start_index);
-        auto data = ret.data() + len1 * (A.index_lists()[n][k] - start_index[n]);
-        for (size_t j = 0; j < len1; j++) {
-            auto data1 = L.data() + tmp_len * j;
-            for (size_t l = 0; l < tmp_len; l++) {
-                data[j] += tmp[l] * data1[l];
-            }
-        }
-        free(tmp);
-        // Communicate
-        if (n != A.slice_mode) {
-            // collective communication
-            Communicator<Ty>::allreduce_inplace(ret.data(), ret.size(), MPI_SUM, MPI_COMM_WORLD);
-        }
-        else {
             // neighbor communication
             Function::neighbor_communicate<Ty>(A.send_to_list, A.recv_from_list, ret);
         }
+        else {
+            size_t nstage = 100;
+            nstage = std::min(nstage, DIANA_CEILDIV(A.shape()[n], 1000));
+
+            auto requests = new MPI_Request[nstage];
+
+            for (size_t stage = 0; stage < nstage; stage++) {
+                auto idx_start = stage * A.shape()[n] / nstage;
+                auto idx_end = (stage + 1) * A.shape()[n] / nstage;
+                for (size_t idx_n = idx_start; idx_n < idx_end; idx_n++) {
+                    if (A.v_pos_list[n][idx_n] == A.v_pos_list[n][idx_n + 1]) {
+                        continue;
+                    }
+
+                    memset(tmp, 0, sizeof(Ty) * tmp_len);
+
+                    for (size_t i = A.v_pos_list[n][idx_n]; i < A.v_pos_list[n][idx_n + 1]; i++) {
+                        auto k = A.v_index_list[n][i];
+                        for (size_t dim = 0; dim < A.ndim() - 1; dim++) {
+                            index[dim] = A.index_lists()[permu[dim]][k];
+                        }
+                        auto val = A.vals()[k];
+
+                        Function::add_outer_product_all(tmp, core_shape, core_stride, M, val, index, A.ndim() - 2, permu, start_index);
+                    }
+
+                    auto data = ret.data() + len1 * (idx_n - start_index[n]);
+                    for (size_t j = 0; j < len1; j++) {
+                        auto data1 = L.data() + tmp_len * j;
+                        for (size_t l = 0; l < tmp_len; l++) {
+                            data[j] += tmp[l] * data1[l];
+                        }
+                    }
+                }
+
+                // collective communication
+                Communicator<Ty>::iallreduce_inplace(ret.data() + len1 * idx_start, len1 * (idx_end - idx_start), MPI_SUM, MPI_COMM_WORLD, requests + stage);
+            }
+
+            Communicator<Ty>::waitall(nstage, requests);
+
+            delete [] requests;
+        }
+
+
+        free(tmp);
         Summary::end(METHOD_NAME);
     }
 
