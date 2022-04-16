@@ -9,8 +9,71 @@
 
 namespace Algorithm::SpTucker {
     template<typename Ty>
+    void global_orth2(Tensor<Ty> &U) {
+        Summary::start(METHOD_NAME);
+        auto len1 = U.shape()[0];
+        auto len2 = U.shape()[1];
+        std::vector<Ty> dot_list(len1 - 1);
+
+        size_t start = mpi_rank() * len2 / mpi_size();
+        size_t end = (mpi_rank() + 1) * len2 / mpi_size();
+
+        for (size_t i = 0; i < len1; i++) {
+            for (size_t j = 0; j < i; j++) {
+                dot_list[j] = 0.0;
+                for (size_t k = start; k < end; k++) {
+                    dot_list[j] += U.data()[k * len1 + i] * U.data()[k * len1 + j];
+                }
+            }
+            Communicator<Ty>::allreduce_inplace(dot_list.data(), i, MPI_SUM, MPI_COMM_WORLD);
+            for (size_t k = 0; k < len2; k++) {
+                for (size_t j = 0; j < i; j++) {
+                    U.data()[k * len1 + i] -= U.data()[k * len1 + j] * dot_list[j];
+                }
+            }
+            Ty norm = 0.0;
+            for (size_t k = 0; k < len2; k++) {
+                norm += U.data()[k * len1 + i] * U.data()[k * len1 + i];
+            }
+            norm = std::sqrt(norm);
+            for (size_t k = 0; k < len2; k++) {
+                U.data()[k * len1 + i] /= norm;
+            }
+        }
+
+        Summary::end(METHOD_NAME);
+    }
+    template<typename Ty>
     void distri_orth2(const SpTensor<Ty> &A, Tensor<Ty> &U) {
-        
+        Summary::start(METHOD_NAME);
+        auto len1 = U.shape()[0];
+        auto len2 = U.shape()[1];
+        auto start_len2 = 0;
+        if (!A.send_to_list.empty()) {
+            start_len2++;
+        }
+        for (size_t i = 0; i < len1; i++) {
+            for (size_t j = 0; j < i; j++) {
+                Ty dot = 0.0;
+                for (size_t k = start_len2; k < len2; k++) {
+                    dot += U.data()[k * len1 + i] * U.data()[k * len1 + j];
+                }
+                Communicator<Ty>::allreduce_inplace(&dot, 1, MPI_SUM, MPI_COMM_WORLD);
+                for (size_t k = 0; k < len2; k++) {
+                    U.data()[k * len1 + i] -= U.data()[k * len1 + j] * dot;
+                }
+            }
+            Ty norm = 0.0;
+            for (size_t k = start_len2; k < len2; k++) {
+                norm += U.data()[k * len1 + i] * U.data()[k * len1 + i];
+            }
+            Communicator<Ty>::allreduce_inplace(&norm, 1, MPI_SUM, MPI_COMM_WORLD);
+            norm = std::sqrt(norm);
+            for (size_t k = 0; k < len2; k++) {
+                U.data()[k * len1 + i] /= norm;
+            }
+        }
+        Summary::end(METHOD_NAME);
     }
 
     template<typename Ty>
@@ -25,13 +88,17 @@ namespace Algorithm::SpTucker {
         auto G_inv = Function::inverse<Ty>(G); // G_Inv = R_n * R_n
         auto LG_inv = Function::matmulNN<Ty>(L, G_inv);
         Function::ttmc_mTL<Ty>(A, M, n, L, R_initial); // R = R_n * not_R_n
-        Operator<Ty>::orth2(R_initial.data(), R_initial.shape()[0], R_initial.shape()[1]);
+        if (n == A.slice_mode) {
+            Algorithm::SpTucker::distri_orth2(A, R_initial);
+        }
+        else {
+            Algorithm::SpTucker::global_orth2<Ty>(R_initial);
+        }
         Summary::end(METHOD_NAME);
     }
 
     template<typename Ty>
     std::tuple<Tensor<Ty>, std::vector<Tensor<Ty>>>
-
     Sp_HOOI_ALS(const SpTensor<Ty> &A, const shape_t &R, size_t max_iter) {
         const shape_t &I = A.shape();
         const size_t kN = A.ndim();
@@ -43,22 +110,17 @@ namespace Algorithm::SpTucker {
             if (n != A.slice_mode) {
                 Tensor<double> U_rand(distribution1, {R[n], I[n]}, false);
                 U_rand.randn();
-                Operator<Ty>::orth2(U_rand.data(), U_rand.shape()[0], U_rand.shape()[1]);
+                U_rand.sync(0);
+                Operator<Ty>::global_orth2(U_rand);
                 Ut.push_back(U_rand);
             }
             else {
-                Tensor<double> U_rand(distribution1, {R[n], A.slice_end - A.slice_satrt + 1}, false);
+                Tensor<double> U_rand(distribution1, {R[n], A.slice_end - A.slice_start + 1}, false);
                 U_rand.randn();
+                Function::neighbor_communicate<Ty>(A.send_to_list, A.recv_from_list, U_rand);
                 Algorithm::SpTucker::distri_orth2(A, U_rand);
+                Ut.push_back(U_rand);
             }
-        }
-        for (size_t n = 0; n < kN; n++) {
-            Ut[n].sync(0);
-        }
-
-        shape_t idx;
-        for (size_t i = 0; i < A.ndim(); i++) {
-            idx.push_back(i);
         }
 
         Tensor<Ty> G;
@@ -69,13 +131,14 @@ namespace Algorithm::SpTucker {
                 Algorithm::SpTucker::Sp_TTMC_ALS_(A, Ut, n, Ut[n]);
             }
         }
-        G = Function::ttmc_mTR(A, Ut, A.ndim() - 1, Ut[A.ndim() - 1]);
+        G = Function::ttmc_mTR(A, Ut, 0, Ut[0]);
         auto G_norm = Function::fnorm<Ty>(G);
 
         output("||G||_F = " + std::to_string(G_norm));
         output("Residual: sqrt(1 - ||G||_F^2 / ||A||_F^2) = " +
                std::to_string(
                        sqrt(1 - (G_norm * G_norm) / (A_norm * A_norm))));
+
         return std::make_tuple(G, Ut);
     }
 }

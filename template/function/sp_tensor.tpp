@@ -7,7 +7,7 @@ namespace Function{
         for (size_t i = 0; i < A.nnz(); i++) {
             ret += A.vals()[i] * A.vals()[i];
         }
-        A.comm()->allreduce_inplace(&ret, 1, MPI_SUM);
+        Communicator<Ty>::allreduce_inplace(&ret, 1, MPI_SUM);
         return sqrt(ret);
     }
 
@@ -232,13 +232,62 @@ namespace Function{
     }
 
     template<typename Ty>
+    void neighbor_communicate(const shape_t &send_to_list, const shape_t &recv_from_list, Tensor<Ty> U) {
+        Summary::start(METHOD_NAME);
+        auto len1 = U.shape()[0];
+        auto end_buffer = new Ty[len1 * recv_from_list.size()];
+        auto start_request = new MPI_Request;
+        auto end_requests = new MPI_Request[recv_from_list.size()];
+
+        if (!send_to_list.empty()){
+            // send begin data
+            Communicator<Ty>::isend(start_request, U.data(), len1, send_to_list[0], MPI_COMM_WORLD, 0);
+        }
+
+
+        if (!recv_from_list.empty()) {
+            // receive end data
+            for (size_t i = 0; i < recv_from_list.size(); i++) {
+                Communicator<Ty>::irecv(end_requests + i, end_buffer + i * len1, len1, recv_from_list[i], MPI_COMM_WORLD, 0);
+            }
+            Communicator<Ty>::waitall(recv_from_list.size(), end_requests);
+            for (size_t i = 0; i < recv_from_list.size(); i++) {
+                for (size_t j = 0; j < len1; j++) {
+                    U.data()[U.size() - len1 + j] += end_buffer[i * len1 + j];
+                }
+            }
+            // send end data
+            for (size_t i = 0; i < recv_from_list.size(); i++) {
+                Communicator<Ty>::isend(end_requests + i, U.data() + U.size() - len1, len1, recv_from_list[i], MPI_COMM_WORLD, 1);
+            }
+        }
+
+        if (!send_to_list.empty()) {
+            // receive begin data
+            Communicator<Ty>::wait(start_request);
+            Communicator<Ty>::recv(U.data(), len1, send_to_list[0], MPI_COMM_WORLD, 1);
+        }
+        Communicator<Ty>::waitall(recv_from_list.size(), end_requests);
+        delete start_request;
+        delete [] end_requests;
+        delete [] end_buffer;
+        Summary::end(METHOD_NAME);
+    }
+
+    template<typename Ty>
     Tensor<Ty>
     ttmc_mTR(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M, size_t n, const Tensor<Ty> &R) {
         Summary::start(METHOD_NAME);
-        assert(A.shape()[n] == R.shape()[1]);
         size_t len1 = 1, len2 = R.shape()[0];
         shape_t permu, core_shape, core_stride;
+        shape_t start_index;
         for (size_t i = 0; i < A.ndim(); i++) {
+            if (i != A.slice_mode) {
+                start_index.push_back(0);
+            }
+            else {
+                start_index.push_back(A.slice_start);
+            }
             if (i != n) {
                 core_shape.push_back(M[i].shape()[0]);
                 core_stride.push_back(len1);
@@ -246,63 +295,47 @@ namespace Function{
                 permu.push_back(i);
             }
         }
-        permu.push_back(n);
-
         auto global_distri = new DistributionGlobal();
         Tensor<Ty> ret(global_distri, {len1, len2}, true);
 
-        auto nthreads = omp_get_max_threads();
-        auto global_tmp = (Ty*) malloc(sizeof(Ty) * ret.size() * (size_t) nthreads);
-
-        #pragma omp parallel
-        {
-            auto tmp = (Ty*) malloc(sizeof(Ty) * len1);
-            auto ithread = omp_get_thread_num();
-            auto local_tmp = global_tmp + (size_t) ithread * ret.size();
-            for (size_t i = 0; i < ret.size(); i++) {
-                local_tmp[i] = 0;
-            }
-
-            shape_t index;
-            for (size_t i = 0; i < A.ndim() - 1; i++) {
-                index.push_back(0);
-            }
-
-            #pragma omp for schedule(dynamic)
-            for (size_t i = 0; i < A.shape()[n]; i++) {
-                if (A.v_index_buffer[n].pos[i + 1] == A.v_index_buffer[n].pos[i])
-                    continue;
-
-                for (size_t j = 0; j < len1; j++) {
-                    tmp[j] = 0;
-                }
-
-                for (size_t j = A.v_index_buffer[n].pos[i]; j < A.v_index_buffer[n].pos[i + 1]; j++){
-                    auto k = A.v_index_buffer[n].index[j];
-                    for (size_t dim = 0; dim < A.ndim(); dim++) {
-                        index[dim] = A.index_lists()[permu[dim]][k];
-                    }
-                    auto val = A.vals()[k];
-                    Function::add_outer_product_all(tmp, core_shape, core_stride, M, val, index, A.ndim() - 2, permu);
-                }
-
-                for (size_t j = 0; j < len1; j++) {
-                    for (size_t k = 0; k < len2; k++) {
-                        local_tmp[k * len1 + j] += tmp[j] * R.data()[i * len2 + k];
-                    }
-                }
-            }
-
-            #pragma omp for
-            for (size_t i = 0; i < ret.size(); i++) {
-                for (int idx = 0; idx < nthreads; idx++) {
-                    ret.data()[i] += global_tmp[i + (size_t) idx * ret.size()];
-                }
-            }
-
-            free(tmp);
+        auto tmp = (Ty*) malloc(sizeof(Ty) * len1);
+        shape_t index;
+        for (size_t i = 0; i < A.ndim() - 1; i++) {
+            index.push_back(0);
         }
-        free(global_tmp);
+        memset(tmp, 0, sizeof(Ty) * len1);
+        for (size_t i = 0; i < A.nnz() - 1; i++) {
+            auto k = A.v_index_list[n][i];
+            auto next_k = A.v_index_list[n][i + 1];
+            for (size_t dim = 0; dim < A.ndim() - 1; dim++) {
+                index[dim] = A.index_lists()[permu[dim]][k];
+            }
+            auto val = A.vals()[k];
+            Function::add_outer_product_all(tmp, core_shape, core_stride, M, val, index, A.ndim() - 2, permu, start_index);
+
+            if (A.index_lists()[n][k] != A.index_lists()[n][next_k]) {
+                for (size_t j = 0; j < len1; j++) {
+                    for (size_t l = 0; l < len2; l++) {
+                        ret.data()[l * len1 + j] += tmp[j] * R.data()[(A.index_lists()[n][k] - start_index[n]) * len2 + l];
+                    }
+                }
+                memset(tmp, 0, sizeof(Ty) * len1);
+            }
+        }
+        auto k = A.v_index_list[n][A.nnz() - 1];
+        for (size_t dim = 0; dim < A.ndim() - 1; dim++) {
+            index[dim] = A.index_lists()[permu[dim]][k];
+        }
+        auto val = A.vals()[k];
+        Function::add_outer_product_all(tmp, core_shape, core_stride, M, val, index, A.ndim() - 2, permu, start_index);
+
+        for (size_t j = 0; j < len1; j++) {
+            for (size_t l = 0; l < len2; l++) {
+                ret.data()[l * len1 + j] += tmp[j] * R.data()[(A.index_lists()[n][k] - start_index[n]) * len2 + l];
+            }
+        }
+        free(tmp);
+
         Communicator<Ty>::allreduce_inplace(ret.data(), (int) ret.size(), MPI_SUM, MPI_COMM_WORLD);
         Summary::end(METHOD_NAME);
         return ret;
@@ -311,12 +344,17 @@ namespace Function{
     template<typename Ty>
     void ttmc_mTL(const SpTensor<Ty> &A, const std::vector<Tensor<Ty>> &M, size_t n, const Tensor<Ty> &L, Tensor<Ty> &ret) {
         Summary::start(METHOD_NAME);
-        assert(L.shape()[1] == M[n].shape()[0]);
         auto len1 = L.shape()[1];
         size_t tmp_len = 1;
-
+        shape_t start_index;
         shape_t permu, core_shape, core_stride;
         for (size_t i = 0; i < A.ndim(); i++) {
+            if (i != A.slice_mode) {
+                start_index.push_back(0);
+            }
+            else {
+                start_index.push_back(A.slice_start);
+            }
             if (i != n) {
                 core_shape.push_back(M[i].shape()[0]);
                 core_stride.push_back(len1);
@@ -324,82 +362,81 @@ namespace Function{
                 permu.push_back(i);
             }
         }
-        assert(L.shape()[0] == tmp_len);
 
-        #pragma omp parallel for
         for (size_t i = 0; i < ret.size(); i++) {
             ret.data()[i] = 0;
         }
 
-        size_t nstage = 10;
-        nstage = std::min(nstage, DIANA_CEILDIV(A.shape()[n], 10000));
-        auto request_list = new MPI_Request[nstage];
-        #pragma omp parallel
-        {
-            shape_t index;
-            for (size_t i = 0; i < A.ndim() - 1; i++) {
-                index.push_back(0);
-            }
-
-            auto tmp = (Ty*) malloc(sizeof(Ty) * tmp_len);
-
-            for (size_t stage = 0; stage < nstage; stage++) {
-                size_t start = stage * A.shape()[n] / nstage;
-                size_t end = (stage + 1) * A.shape()[n] / nstage;
-
-                #pragma omp for schedule(dynamic)
-                for (size_t i = start; i < end; i++) {
-                    if (A.v_index_buffer[n].pos[i + 1] == A.v_index_buffer[n].pos[i])
-                        continue;
-
-                    for (size_t j = 0; j < tmp_len; j++) {
-                        tmp[j] = 0;
-                    }
-
-                    for (size_t j = A.v_index_buffer[n].pos[i]; j < A.v_index_buffer[n].pos[i + 1]; j++){
-                        auto k = A.v_index_buffer[n].index[j];
-                        for (size_t dim = 0; dim < A.ndim() - 1; dim++) {
-                            index[dim] = A.index_lists()[permu[dim]][k];
-                        }
-                        auto val = A.vals()[k];
-                        Function::add_outer_product_all(tmp, core_shape, core_stride, M, val, index, A.ndim() - 2, permu);
-                    }
-
-                    auto data = ret.data() + len1 * i;
-                    for (size_t j = 0; j < len1; j++) {
-                        auto data1 = L.data() + tmp_len * j;
-                        for (size_t k = 0; k < tmp_len; k++) {
-                            data[j] += tmp[k] * data1[k];
-                        }
-                    }
-                }
-                #pragma omp master
-                {
-                    Communicator<Ty>::iallreduce_inplace(ret.data() + start * len1, (int) len1 * (int) (end - start), MPI_SUM, MPI_COMM_WORLD, request_list + stage);
-                }
-            }
-
-            free(tmp);
+        auto tmp = (Ty*) malloc(sizeof(Ty) * tmp_len);
+        shape_t index;
+        for (size_t i = 0; i < A.ndim() - 1; i++) {
+            index.push_back(0);
         }
-        //Communicator<Ty>::allreduce_inplace(ret.data(), (int) ret.size(), MPI_SUM, MPI_COMM_WORLD);
-        Communicator<Ty>::waitall((int) nstage, request_list);
-        delete [] request_list;
+
+        for (size_t i = 0; i < tmp_len; i++) {
+            tmp[i] = 0;
+        }
+        for (size_t i = 0; i < A.nnz() - 1; i++) {
+            auto k = A.v_index_list[n][i];
+            auto next_k = A.v_index_list[n][i + 1];
+            for (size_t dim = 0; dim < A.ndim() - 1; dim++) {
+                index[dim] = A.index_lists()[permu[dim]][k];
+            }
+            auto val = A.vals()[k];
+
+            Function::add_outer_product_all(tmp, core_shape, core_stride, M, val, index, A.ndim() - 2, permu, start_index);
+
+            if (A.index_lists()[n][k] != A.index_lists()[n][next_k]) {
+                auto data = ret.data() + len1 * (A.index_lists()[n][k] - start_index[n]);
+                for (size_t j = 0; j < len1; j++) {
+                    auto data1 = L.data() + tmp_len * j;
+                    for (size_t l = 0; l < tmp_len; l++) {
+                        data[j] += tmp[l] * data1[l];
+                    }
+                }
+                memset(tmp, 0, sizeof(Ty) * tmp_len);
+            }
+        }
+
+        auto k = A.v_index_list[n][A.nnz() - 1];
+        for (size_t dim = 0; dim < A.ndim() - 1; dim++) {
+            index[dim] = A.index_lists()[permu[dim]][k];
+        }
+        auto val = A.vals()[k];
+        Function::add_outer_product_all(tmp, core_shape, core_stride, M, val, index, A.ndim() - 2, permu, start_index);
+        auto data = ret.data() + len1 * (A.index_lists()[n][k] - start_index[n]);
+        for (size_t j = 0; j < len1; j++) {
+            auto data1 = L.data() + tmp_len * j;
+            for (size_t l = 0; l < tmp_len; l++) {
+                data[j] += tmp[l] * data1[l];
+            }
+        }
+        free(tmp);
+        // Communicate
+        if (n != A.slice_mode) {
+            // collective communication
+            Communicator<Ty>::allreduce_inplace(ret.data(), ret.size(), MPI_SUM, MPI_COMM_WORLD);
+        }
+        else {
+            // neighbor communication
+            Function::neighbor_communicate<Ty>(A.send_to_list, A.recv_from_list, ret);
+        }
         Summary::end(METHOD_NAME);
     }
 
     template<typename Ty>
     void add_outer_product_all(Ty *data, const shape_t &shape, const shape_t &stride, const std::vector<Tensor<Ty>> &M, Ty val,
-                               const shape_t &index, size_t dim, shape_t &permu){
+                               const shape_t &index, size_t dim, shape_t &permu, shape_t &start_index){
         if (dim == 0) {
-            auto vec0 = M[permu[0]].data() + index[0] * M[permu[0]].shape()[0];
+            auto vec0 = M[permu[0]].data() + (index[0] - start_index[permu[0]]) * M[permu[0]].shape()[0];
             auto size0 = M[permu[dim]].shape()[0];
             for (size_t i = 0; i < size0; i++) {
                 data[i] += val * vec0[i];
             }
         }
         else if (dim == 1) {
-            auto vec1 = M[permu[1]].data() + index[1] * M[permu[1]].shape()[0];
-            auto vec0 = M[permu[0]].data() + index[0] * M[permu[0]].shape()[0];
+            auto vec1 = M[permu[1]].data() + (index[1] - start_index[permu[1]]) * M[permu[1]].shape()[0];
+            auto vec0 = M[permu[0]].data() + (index[0] - start_index[permu[0]]) * M[permu[0]].shape()[0];
             auto size1 = shape[1];
             auto size0 = shape[0];
             for (size_t j = 0; j < size1; j++) {
@@ -411,9 +448,9 @@ namespace Function{
             }
         }
         else if (dim == 2) {
-            auto vec2 = M[permu[2]].data() + index[2] * M[permu[2]].shape()[0];
-            auto vec1 = M[permu[1]].data() + index[1] * M[permu[1]].shape()[0];
-            auto vec0 = M[permu[0]].data() + index[0] * M[permu[0]].shape()[0];
+            auto vec2 = M[permu[2]].data() + (index[2] - start_index[permu[2]]) * M[permu[2]].shape()[0];
+            auto vec1 = M[permu[1]].data() + (index[1] - start_index[permu[1]]) * M[permu[1]].shape()[0];
+            auto vec0 = M[permu[0]].data() + (index[0] - start_index[permu[0]]) * M[permu[0]].shape()[0];
             auto size2 = shape[2];
             auto size1 = shape[1];
             auto size0 = shape[0];
@@ -433,8 +470,8 @@ namespace Function{
             auto size_dim = shape[dim];
             auto J_dim = M[permu[dim]].shape()[0];
             for (size_t i = 0; i < size_dim; i++) {
-                add_outer_product_all<Ty>(data + stride[dim] * i, shape, stride, M, val * M[permu[dim]].data()[index[dim] * J_dim + i],
-                                            index, dim - 1, permu);
+                add_outer_product_all<Ty>(data + stride[dim] * i, shape, stride, M, val * M[permu[dim]].data()[(index[dim] - start_index[permu[dim]]) * J_dim + i],
+                                            index, dim - 1, permu, start_index);
             }
         }
     }

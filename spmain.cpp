@@ -7,12 +7,7 @@
 #include <cstdio>
 #include <omp.h>
 int main(int argc, char * argv[]) {
-    int required = MPI_THREAD_FUNNELED;
-    int provided;
-    MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided);
-    if (required > provided) {
-        MPI_Abort(MPI_COMM_WORLD, 1);
-    }
+    MPI_Init(&argc, &argv);
     Summary::init();
     srand((unsigned int) 1);
     auto rank = mpi_rank();
@@ -24,6 +19,7 @@ int main(int argc, char * argv[]) {
         exit(1);
     }
     else {
+        output("reading data...");
         read_data<double>(argv[1], dbf);
     }
 
@@ -44,6 +40,7 @@ int main(int argc, char * argv[]) {
     output("nthread    : " + std::to_string(omp_get_max_threads()));
 
 
+    output("creating sparse tensor...");
     SpTensor<double> A(dbf);
     Communicator<size_t>::barrier();
     free(dbf);
@@ -52,7 +49,7 @@ int main(int argc, char * argv[]) {
     for (size_t i = 0; i < A.ndim(); i++) {
         R.push_back(truncation);
     }
-    auto[G, U] = Algorithm::SpTucker::Sp_HOOI_ALS(A, R, 1);
+    auto[G, U] = Algorithm::SpTucker::Sp_HOOI_ALS(A, R, 2);
 
     Summary::finalize();
     Summary::print_summary();

@@ -53,8 +53,11 @@ namespace Function {
     void permutate(Ty* data1, Ty* data2, shape_t & shape, shape_t & permu);
 
     template<typename Ty>
+    void neighbor_communicate(const shape_t &send_to_list, const shape_t &recv_from_list, Tensor<Ty> U);
+
+    template<typename Ty>
     void add_outer_product_all(Ty *data, const shape_t &shape, const shape_t & stride, const std::vector<Tensor<Ty>> &M, Ty val,
-                               const shape_t &index, size_t dim, shape_t &permu);
+                               const shape_t &index, size_t dim, shape_t &permu, shape_t &start_index);
 
     template<typename Ty>
     void add_outer_product(Ty* data, const size_t *start_index, const size_t *end_index, const size_t *stride,

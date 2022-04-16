@@ -31,13 +31,14 @@ private:
     shape_t dims_;
     size_t ndim_;
     size_t nnz_;
+
+public:
     size_t slice_mode;
     size_t slice_start;
     size_t slice_end;
-public:
     shape_t send_to_list;
     shape_t recv_from_list;
-
+    std::vector<size_t*> v_index_list;
     SpTensor();
     SpTensor(data_buffer<Ty> *);
     ~SpTensor();
@@ -47,7 +48,6 @@ public:
     [[nodiscard]] inline const shape_t &shape() const;
     [[nodiscard]] inline size_t** index_lists() const;
     inline const Ty* vals() const;
-    inline Communicator<Ty> *comm() const;
 };
 
 template<typename Ty>
@@ -57,6 +57,9 @@ SpTensor<Ty>::~SpTensor() {
         free(this->index_lists_[i]);
     }
     free(this->index_lists_);
+    for (size_t i = 0; i < this->v_index_list.size(); i++) {
+        free(this->v_index_list[i]);
+    }
 }
 
 template<typename Ty>
@@ -236,6 +239,31 @@ SpTensor<Ty>::SpTensor(data_buffer<Ty> *dbf) {
     }
     free(slice_start_list);
     free(slice_end_list);
+
+
+    // set index vector
+    auto start_index_list = new size_t[this->shape()[this->slice_mode] + 1];
+
+    for (size_t i = 0; i < this->ndim(); i++) {
+        auto index_ptr = (size_t*) malloc(sizeof(size_t) * this->nnz());
+        for (size_t j = 0; j <= this->shape()[i]; j++) {
+            start_index_list[j] = 0;
+        }
+        for (size_t j = 0; j < this->nnz(); j++) {
+            auto idx_i = this->index_lists()[i][j];
+            start_index_list[idx_i + 1]++;
+        }
+        for (size_t j = 1; j <= this->shape()[i]; j++) {
+            start_index_list[j] += start_index_list[j - 1];
+        }
+        for (size_t j = 0; j < this->nnz(); j++) {
+            auto idx_i = this->index_lists()[i][j];
+            index_ptr[start_index_list[idx_i]++] = j;
+        }
+        this->v_index_list.push_back(index_ptr);
+    }
+
+    delete [] start_index_list;
     Summary::end(METHOD_NAME);
 }
 
@@ -262,11 +290,6 @@ inline size_t ** SpTensor<Ty>::index_lists() const {
 template<typename Ty>
 inline const Ty* SpTensor<Ty>::vals() const {
     return this->vals_;
-}
-
-template<typename Ty>
-inline Communicator<Ty> *SpTensor<Ty>::comm() const {
-    return this->comm_;
 }
 
 #include "sp_tensor_mpi.tpp"

@@ -57,7 +57,6 @@ void Operator<double>::constant(double *A, double c, size_t n) {
 
 template<>
 void Operator<double>::rand(double *A, size_t n) {
-    #pragma omp parallel for
     for (size_t i = 0; i < n; i++) {
         A[i] = (double) std::rand() / RAND_MAX;
     }
@@ -65,7 +64,6 @@ void Operator<double>::rand(double *A, size_t n) {
 
 template<>
 void Operator<double>::randn(double *A, size_t n) {
-    #pragma omp parallel for
     for (size_t i = 0; i < n; i++) {
         A[i] = Util::randn();
     }
@@ -74,7 +72,6 @@ void Operator<double>::randn(double *A, size_t n) {
 template<>
 double Operator<double>::fnorm(double *A, size_t n) {
     double ret = 0;
-    #pragma omp parallel for reduction(+:ret)
     for (size_t i = 0; i < n; i++) {
         ret += A[i] * A[i];
     }
